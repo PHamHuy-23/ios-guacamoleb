@@ -20,11 +20,22 @@ reports Android 16; `dtbo.img` is 24 MiB and starts with DT table magic
 (Snapdragon 855); it also contains SM8150P variants. The DTBO table has 10
 entries. These are suitable initial hardware references for this GM1901 ROM,
 not an iOS boot image or proof that a selected device-tree overlay is active.
-Next: validate GM1901 product/board IDs and active overlays against the phone,
-then inventory the hardware nodes needed by the shim and XNU. Keep device
-images and dumps out of git. Do not flash partitions or alter GPT during
-initial investigation. Preserve the existing sweet implementation until
-OnePlus-specific boot facts are verified.
+
+**Offline feasibility probe (2026-10-20):** found 20 valid embedded SoC FDTs
+(SM8150/SM8150P v1/v2 variants) and 10 DTBO overlays. The first FDT reports
+GICv3 at `0x17a00000`/`0x17a60000` and UFS at `0x1d84000`, matching the
+current sweet shim's GIC bases and UFS base; the base FDT marks its UFS node
+disabled, so this alone does not prove runtime usability. The overlays include
+Qualcomm DSI display nodes and Synaptics S3706 touch alternatives. This is
+evidence of a plausible same-family bring-up path with some reusable early
+boot addresses, but not enough to select the active GM1901 display/touch setup
+or claim a boot. The user currently has no access to the phone and wants a
+feasibility assessment first. Next offline step: map the GM1901 DTB/DTBO board
+variants and compare required properties with the sweet ADT/shim; no target
+code has been ported or boot-tested. Keep device images and dumps out of git.
+Do not flash partitions or alter GPT during initial investigation. Preserve
+the existing sweet implementation until OnePlus-specific boot facts are
+verified.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
