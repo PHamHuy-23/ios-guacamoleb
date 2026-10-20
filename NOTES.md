@@ -2,6 +2,13 @@
 
 ## Active handoff update (2026-10-20)
 
+**Documentation milestone:** translated `README.md` into Vietnamese while
+preserving commands, technical identifiers, links, and the existing
+sweet-specific bring-up instructions. README is translated only; it does not
+claim OnePlus 7 support. Validation: `git diff --check` passed, Markdown code
+fences are balanced, and key commands/identifiers remain present. Commit:
+pending at handoff.
+
 **User-selected target: OnePlus 7 GM1901 only** (replace the project's target;
 do not plan a parallel sweet target). The user reports its bootloader is
 unlocked. This is a requested direction, not a verified hardware probe.
