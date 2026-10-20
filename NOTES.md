@@ -12,18 +12,18 @@ UFS, framebuffer, CPU topology, generated ADT, boot-image packaging and XNU
 machine config all need to be checked against GM1901 before changing target
 defaults.
 
-**User supplied Revolution X ROM artifacts** in `/Users/nguyendinhkhanh/Desktop/test/`
-(`boot.img`, `dtbo.img`). Read-only format probe: `boot.img` is 96 MiB with
-Android boot header v2; `dtbo.img` is 24 MiB and starts with the DT table
-magic `d7b7ab1e`. The embedded DTB's first tree identifies Qualcomm SM8150
+**User supplied and confirmed Evolution X 11.6.3 / Android 16 artifacts for
+GM1901** in `/Users/nguyendinhkhanh/Desktop/test/` (`boot.img`, `dtbo.img`).
+Read-only format probe: `boot.img` is 96 MiB with Android boot header v2 and
+reports Android 16; `dtbo.img` is 24 MiB and starts with DT table magic
+`d7b7ab1e`. The embedded DTB's first tree identifies Qualcomm SM8150
 (Snapdragon 855); it also contains SM8150P variants. The DTBO table has 10
-entries, but the inspected metadata does not identify GM1901. This supports
-using these files as initial hardware references, not as proof they match the
-target or as an iOS boot image. Next: confirm the Revolution X build is for
-GM1901, then validate product/board IDs and active overlays against the phone;
-obtain stock firmware/live device-tree evidence as needed. Keep device images
-and dumps out of git. Do not flash partitions or alter GPT during initial
-investigation. Preserve the existing sweet implementation until
+entries. These are suitable initial hardware references for this GM1901 ROM,
+not an iOS boot image or proof that a selected device-tree overlay is active.
+Next: validate GM1901 product/board IDs and active overlays against the phone,
+then inventory the hardware nodes needed by the shim and XNU. Keep device
+images and dumps out of git. Do not flash partitions or alter GPT during
+initial investigation. Preserve the existing sweet implementation until
 OnePlus-specific boot facts are verified.
 
 ## Agent handoff / active work (2026-10-15, latest)
