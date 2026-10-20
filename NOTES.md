@@ -7,7 +7,7 @@ preserving commands, technical identifiers, links, and the existing
 sweet-specific bring-up instructions. README is translated only; it does not
 claim OnePlus 7 support. Validation: `git diff --check` passed, Markdown code
 fences are balanced, and key commands/identifiers remain present. Commit:
-pending at handoff.
+`5557632`.
 
 **User-selected target: OnePlus 7 GM1901 only** (replace the project's target;
 do not plan a parallel sweet target). The user reports its bootloader is
