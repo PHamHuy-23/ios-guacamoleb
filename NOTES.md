@@ -10,11 +10,17 @@ unlocked. This is a requested direction, not a verified hardware probe.
 current implementation and README are sweet-specific: shim MMIO addresses,
 UFS, framebuffer, CPU topology, generated ADT, boot-image packaging and XNU
 machine config all need to be checked against GM1901 before changing target
-defaults. Next concrete step: obtain the GM1901 stock boot image/live device
-tree and identify board/SoC details and memory/peripheral layout; keep device
-images and dumps out of git. Do not flash partitions or alter GPT during
-initial investigation. Preserve the existing sweet implementation until
-OnePlus-specific boot facts are verified.
+defaults.
+
+**User supplied Revolution X ROM artifacts** in `/Users/nguyendinhkhanh/Desktop/test/`
+(`boot.img`, `dtbo.img`). Read-only format probe: `boot.img` is 96 MiB with
+Android boot header v2; `dtbo.img` is 24 MiB and starts with the DT table
+magic `d7b7ab1e`. These observations do not establish that the images are for
+GM1901 or that their device tree is suitable. Next: inspect the embedded DTB
+and overlay metadata for board compatibility, then obtain stock firmware/live
+device-tree evidence as needed. Keep device images and dumps out of git. Do
+not flash partitions or alter GPT during initial investigation. Preserve the
+existing sweet implementation until OnePlus-specific boot facts are verified.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
