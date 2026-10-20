@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## Active handoff update (2026-10-20)
+
+**User-selected target: OnePlus 7 GM1901 only** (replace the project's target;
+do not plan a parallel sweet target). The user reports its bootloader is
+unlocked. This is a requested direction, not a verified hardware probe.
+
+**No OnePlus-specific code or boot image has been built or tested yet.** The
+current implementation and README are sweet-specific: shim MMIO addresses,
+UFS, framebuffer, CPU topology, generated ADT, boot-image packaging and XNU
+machine config all need to be checked against GM1901 before changing target
+defaults. Next concrete step: obtain the GM1901 stock boot image/live device
+tree and identify board/SoC details and memory/peripheral layout; keep device
+images and dumps out of git. Do not flash partitions or alter GPT during
+initial investigation. Preserve the existing sweet implementation until
+OnePlus-specific boot facts are verified.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
