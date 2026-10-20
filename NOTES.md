@@ -15,12 +15,16 @@ defaults.
 **User supplied Revolution X ROM artifacts** in `/Users/nguyendinhkhanh/Desktop/test/`
 (`boot.img`, `dtbo.img`). Read-only format probe: `boot.img` is 96 MiB with
 Android boot header v2; `dtbo.img` is 24 MiB and starts with the DT table
-magic `d7b7ab1e`. These observations do not establish that the images are for
-GM1901 or that their device tree is suitable. Next: inspect the embedded DTB
-and overlay metadata for board compatibility, then obtain stock firmware/live
-device-tree evidence as needed. Keep device images and dumps out of git. Do
-not flash partitions or alter GPT during initial investigation. Preserve the
-existing sweet implementation until OnePlus-specific boot facts are verified.
+magic `d7b7ab1e`. The embedded DTB's first tree identifies Qualcomm SM8150
+(Snapdragon 855); it also contains SM8150P variants. The DTBO table has 10
+entries, but the inspected metadata does not identify GM1901. This supports
+using these files as initial hardware references, not as proof they match the
+target or as an iOS boot image. Next: confirm the Revolution X build is for
+GM1901, then validate product/board IDs and active overlays against the phone;
+obtain stock firmware/live device-tree evidence as needed. Keep device images
+and dumps out of git. Do not flash partitions or alter GPT during initial
+investigation. Preserve the existing sweet implementation until
+OnePlus-specific boot facts are verified.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
