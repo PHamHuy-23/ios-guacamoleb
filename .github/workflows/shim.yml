@@ -50,8 +50,9 @@ jobs:
 
       - name: Build shim (diagnostic mode if no payload)
         run: |
-          if [ -f shim/out/payload-gm1901.bin ]; then
-            ./shim/build.sh shim/out/payload-gm1901.bin
+          PAYLOAD_PATH="$(pwd)/shim/out/payload-gm1901.bin"
+          if [ -f "$PAYLOAD_PATH" ]; then
+            ./shim/build.sh "$PAYLOAD_PATH"
           else
             ./shim/build.sh
           fi
