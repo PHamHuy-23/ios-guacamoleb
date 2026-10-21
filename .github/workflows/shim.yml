@@ -1,0 +1,78 @@
+name: shim
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload_artifact:
+        description: "Run ID containing xnu-kernel artifact (to fetch kernel)"
+        required: false
+        default: ""
+
+concurrency:
+  group: shim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-shim:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download kernel from previous run
+        if: inputs.payload_artifact != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p xnu/out
+          gh run download ${{ inputs.payload_artifact }} -R ${{ github.repository }} -n xnu-kernel -D xnu/out
+          ls -la xnu/out/
+
+      - name: Generate ADT (without d22ap.adt — will warn but continue)
+        run: |
+          mkdir -p shim/out
+          python3 tools/mkadt.py shim/out/gm1901.adt --highmem || true
+          python3 tools/mkadt.py shim/out/gm1901.adt --highmem --dump | head -80
+          ls -la shim/out/
+
+      - name: Build payload (if kernel available)
+        if: inputs.payload_artifact != ''
+        run: |
+          KERNEL=$(ls xnu/out/kernel.development.* 2>/dev/null | head -1)
+          if [ -n "$KERNEL" ]; then
+            python3 tools/mkpayload.py \
+              "$KERNEL" \
+              shim/out/gm1901.adt \
+              shim/out/payload-gm1901.bin \
+              --cmdline 'debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2'
+            ls -la shim/out/payload-gm1901.bin
+          fi
+
+      - name: Build shim (diagnostic mode if no payload)
+        run: |
+          if [ -f shim/out/payload-gm1901.bin ]; then
+            ./shim/build.sh shim/out/payload-gm1901.bin
+          else
+            ./shim/build.sh
+          fi
+          ls -la shim/out/
+
+      - name: Verify payload integrity
+        if: inputs.payload_artifact != ''
+        run: |
+          if [ -f shim/out/payload-gm1901.bin ] && [ -f shim/out/shim-boot.img ]; then
+            python3 tools/unpack_bootv2.py shim/out/shim-boot.img shim/out/check
+            cmp shim/out/check/ramdisk shim/out/payload-gm1901.bin && echo "✅ Payload integrity OK!"
+            rm -rf shim/out/check
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shim-boot
+          path: |
+            shim/out/shim-boot.img
+            shim/out/shim-boot-oos.img
+            shim/out/gm1901.adt
+            shim/out/payload-gm1901.bin
+          if-no-files-found: warn
+          retention-days: 14
