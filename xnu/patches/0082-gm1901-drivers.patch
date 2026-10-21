@@ -1,0 +1,673 @@
+--- a/osfmk/arm64/sweet_early.c
++++ b/osfmk/arm64/sweet_early.c
+@@ -1,5 +1,5 @@
+ /*
+- * Redmi Note 10 Pro bootstrap console. No allocation, locks, ADT parsing or
++ * OnePlus 7 (GM1901) bootstrap console (1080x2340). No allocation, locks, ADT parsing or
+  * per-CPU state: panic() can reach this before a current thread exists.
+  * start.s maps the splash framebuffer VA=PA as Normal Non-Cacheable memory.
+  * arm_vm_init installs a reserved kernel VA alias before removing TTBR0;
+@@ -14,7 +14,7 @@
+ static volatile uint32_t *early_fb = (volatile uint32_t *)(uintptr_t)0x9c000000;
+ #define EARLY_FB early_fb
+ #define EARLY_WIDTH 1080u
+-#define EARLY_HEIGHT 2400u
++#define EARLY_HEIGHT 2340u
+ #define EARLY_STRIDE (4320u / 4)
+ #define EARLY_SCALE 2u
+ #define EARLY_CELL_W (8u * EARLY_SCALE)
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -1,6 +1,10 @@
+ /*
+- * Minimal polled SWEET keys. Call once after the scheduler is running.
+- * See hw-report.md: volume-up is PM6150L SID 4, NOT PM6150 SID 0.
++ * Minimal polled OnePlus 7 (GM1901) keys. Call once after the scheduler runs.
++ * GM1901 DT (dtbo_20.dtb / sm8150):
++ *   - Power (key 0):       PM8150 SID 0 pon@800 (PPID 0x008, RT 0x0810 bit 0)
++ *   - Volume Up (key 1):   PM8150 SID 0 gpio6   (PPID 0x0c5, RT 0xc510 bit 0, active low)
++ *   - Volume Down (key 2): PM8150 SID 0 gpio7   (PPID 0x0c6, RT 0xc610 bit 0, active low)
++ *                          or pon@800 RESIN     (PPID 0x008, RT 0x0810 bit 1)
+  * PMIC access is READ ONLY: the sole MMIO write issues EXT_READL on an
+  * observer channel. No PMIC config, IRQ acknowledge or reset writes exist.
+  */
+@@ -21,11 +25,16 @@
+ #define KEYS_OBS_PA      0x0e600000u
+ #define KEYS_CNFG_PA     0x0c40a000u
+ #define KEYS_PON_RT      0x0810u
+-#define KEYS_GPIO_RT     0xc110u
++#define KEYS_UP_PPID     0x0c5u
++#define KEYS_UP_RT       0xc510u
++#define KEYS_DN_PPID     0x0c6u
++#define KEYS_DN_RT       0xc610u
+ #define KEYS_NO_APID     0xffffu
+ 
+ static vm_offset_t keys_core, keys_obs, keys_cnfg;
+-static uint16_t keys_pon_apid = KEYS_NO_APID, keys_gpio_apid = KEYS_NO_APID;
++static uint16_t keys_pon_apid = KEYS_NO_APID;
++static uint16_t keys_up_apid = KEYS_NO_APID;
++static uint16_t keys_dn_apid = KEYS_NO_APID;
+ static uint32_t keys_version, keys_last_status;
+ static bool keys_started;
+ static int keys_sleep_chan;
+@@ -98,23 +107,29 @@
+ 	(void)arg;
+ 	(void)result;
+ 	for (;;) {
+-		uint8_t pon = 0, gpio = 0;
++		uint8_t pon = 0, up = 0, dn = 0;
+ 		bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-		bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-		int now[3] = {!!(pon & 1u), !(gpio & 1u), !!(pon & 2u)};
+-		if (!pok || !gok) {
++		bool uok = keys_read(keys_up_apid, KEYS_UP_RT, &up);
++		bool dok = keys_read(keys_dn_apid, KEYS_DN_RT, &dn);
++		int now[3] = {
++			pok ? !!(pon & 1u) : state[0],
++			uok ? !(up & 1u) : state[1],
++			((pok && (pon & 2u)) || (dok && !(dn & 1u))) ? 1 : 0,
++		};
++		if (!pok && !uok && !dok) {
+ 			if ((errors++ % 250u) == 0) {
+-				printf("SWEET KEYS: read error pon-ok=%d gpio-ok=%d arb-status=%#x\n",
+-				    pok, gok, keys_last_status);
++				printf("SWEET KEYS: read error pon-ok=%d up-ok=%d dn-ok=%d arb-status=%#x\n",
++				    pok, uok, dok, keys_last_status);
+ 			}
+ 		} else {
+ 			errors = 0;
+ 		}
++		bool valid[3] = {pok, uok, pok || dok};
+ 		for (int k = 0; k < 3; ++k) {
+-			if ((k == 1 ? gok : pok) && now[k] != state[k]) {
++			if (valid[k] && now[k] != state[k]) {
+ 				state[k] = now[k];
+-				printf("SWEET KEYS: key=%d down=%d pon=%#x gpio4:c110=%#x\n",
+-				    k, state[k], pon, gpio);
++				printf("SWEET KEYS: key=%d down=%d pon=%#x gpio6=%#x gpio7=%#x\n",
++				    k, state[k], pon, up, dn);
+ 				sweet_hid_key(k, state[k]);
+ 			}
+ 		}
+@@ -122,6 +137,25 @@
+ 	}
+ }
+ 
++static bool
++keys_check_gpio(uint16_t apid, uint16_t base, const char *label)
++{
++	uint8_t rt = 0, mode = 0, en = 0, subtype = 0;
++	bool rok = keys_read(apid, base + 0x10u, &rt);
++	bool mok = keys_read(apid, base + 0x40u, &mode);
++	bool eok = keys_read(apid, base + 0x46u, &en);
++	bool sok = keys_read(apid, base + 0x05u, &subtype);
++	printf("SWEET KEYS: %s apid=%u rt=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
++	    label, apid, rt, rok, mode, mok, en, eok, subtype, sok);
++	unsigned dir = (subtype >= 0x10u && subtype <= 0x13u) ?
++	    (mode & 3u) : ((mode >> 4) & 7u);
++	if (!rok || !eok || !mok || !sok || !(en & 0x80u) || (dir != 0 && dir != 2)) {
++		printf("SWEET KEYS: %s not confirmed enabled as input; withheld\n", label);
++		return false;
++	}
++	return true;
++}
++
+ void
+ sweet_keys_init(void)
+ {
+@@ -152,24 +186,19 @@
+ 		return;
+ 	}
+ 	keys_pon_apid = keys_find_apid(0x008, count);
+-	keys_gpio_apid = keys_find_apid(0x4c1, count);
+-	uint8_t pon = 0, gpio = 0, mode = 0, en = 0, subtype = 0;
++	keys_up_apid = keys_find_apid(KEYS_UP_PPID, count);
++	keys_dn_apid = keys_find_apid(KEYS_DN_PPID, count);
++	uint8_t pon = 0;
+ 	bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-	bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-	bool mok = keys_read(keys_gpio_apid, 0xc140, &mode);
+-	bool eok = keys_read(keys_gpio_apid, 0xc146, &en);
+-	bool sok = keys_read(keys_gpio_apid, 0xc105, &subtype);
+-	printf("SWEET KEYS: arb=%#x apids=%u pon-apid=%u gpio4-apid=%u pon=%#x/%d gpio=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
+-	    keys_version, count, keys_pon_apid, keys_gpio_apid,
+-	    pon, pok, gpio, gok, mode, mok, en, eok, subtype, sok);
+-	/* GPIO configuration belongs to firmware. Diagnose, never repair it here. */
+-	unsigned dir = subtype >= 0x10u && subtype <= 0x13u ?
+-	    mode & 3u : (mode >> 4) & 7u;
+-	if (!eok || !mok || !sok || !(en & 0x80u) || (dir != 0 && dir != 2)) {
+-		printf("SWEET KEYS: GPIO2 not confirmed enabled as input; volume-up withheld, PMIC unchanged\n");
+-		keys_gpio_apid = KEYS_NO_APID;
++	printf("SWEET KEYS: arb=%#x apids=%u pon-apid=%u pon=%#x/%d\n",
++	    keys_version, count, keys_pon_apid, pon, pok);
++	if (!keys_check_gpio(keys_up_apid, 0xc500u, "PM8150-GPIO6(vol-up)")) {
++		keys_up_apid = KEYS_NO_APID;
+ 	}
+-	if (!pok && !gok) {
++	if (!keys_check_gpio(keys_dn_apid, 0xc600u, "PM8150-GPIO7(vol-dn)")) {
++		keys_dn_apid = KEYS_NO_APID;
++	}
++	if (!pok && keys_up_apid == KEYS_NO_APID && keys_dn_apid == KEYS_NO_APID) {
+ 		printf("SWEET KEYS: no readable keys; polling retained for recovery\n");
+ 	}
+ 	kern_return_t kr = kernel_thread_start(keys_thread, NULL, &thread);
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -328,8 +328,9 @@
+ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ {
+ 	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources. */
+-	if (!res || strcmp(res, "ldoc11") || mv < 2950 || mv > 3400) {
+-		printf("SWEET RPMH: expected ldoc11 and 2950..3400 mV\n");
++	if (!res || (strcmp(res, "ldoa17") && strcmp(res, "ldoc11")) ||
++	    mv < 2950 || mv > 3400) {
++		printf("SWEET RPMH: expected ldoa17/ldoc11 and 2950..3400 mV\n");
+ 		return EINVAL;
+ 	}
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1,9 +1,13 @@
+ /*
+- * SWEET SE7 FIFO I2C / GT9896 Yellowstone / Focaltech 54:52 bring-up.
++ * OnePlus 7 (GM1901) GENI SE17 FIFO I2C / Synaptics S3706 RMI4 touch bring-up.
+  * Call once after the scheduler is running; all work runs on one thread.
+- * Requires ABL-loaded GENI I2C firmware; votes L11C through sweet_rpmh.c.
+- * No firmware/config upload or direct PMIC writes. Only IC data write:
+- * zero to GT9896's event status after reading a report. See touch2/report.md.
++ * Hardware mapping (from GM1901 dtbo_20.dtb + synaptics_driver_s3706.o):
++ *   - Bus:    /soc/i2c@0xc80000 (qupv3_se17_i2c, Wrapper 2 s0), slave 0x20
++ *   - Clocks: GCC 0x00100000, vote 0x52014 (wrap2 m/s_ahb + s0), RCG 0x1e148
++ *   - TLMM:   SOUTH tile 0x03d00000 (0x03000000 + 0x00d00000)
++ *             GPIO 55/56 = SE17 SDA/SCL (mux 1), GPIO 54 = Reset,
++ *             GPIO 119 = 1.8V enable, GPIO 122 = IRQ input
++ *   - Power:  PM8150 L17A ("ldoa17", 3008 mV) via sweet_rpmh.c
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+@@ -22,21 +26,16 @@
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
+ void sweet_touch_init(void);
+ 
+-#define TOUCH_SE_PA      0x00a84000u
++#define TOUCH_SE_PA      0x00c80000u /* GM1901 qupv3_se17_i2c (Wrapper 2 S0) */
+ #define TOUCH_GCC_PA     0x00100000u
+-#define TOUCH_NORTH_PA   0x03900000u /* DT TLMM + NORTH (0x500000) */
+-#define TOUCH_GCC_VOTE   0x5200cu
+-#define TOUCH_RCG       0x18148u    /* wrapper1 LOCAL S1 = global SE7 */
++#define TOUCH_SOUTH_PA   0x03d00000u /* SM8150 TLMM 0x03000000 + SOUTH 0x00d00000 */
++#define TOUCH_GCC_VOTE   0x52014u    /* APCS_CLOCK_BRANCH_ENA_VOTE_1 */
++#define TOUCH_RCG        0x1e148u    /* gcc_qupv3_wrap2_s0_clk_src CMD_RCGR */
+ #define TOUCH_GPIO_CFG(n) ((uint32_t)(n) * 0x1000u)
+ #define TOUCH_GPIO_IO(n)  (TOUCH_GPIO_CFG(n) + 4u)
+ #define TOUCH_MAX        10u
+-#define TOUCH_GOODIX     1
+-#define TOUCH_FTS        2
+-/* GT9896 is Yellowstone in Xiaomi sweet-r-oss, not the Berlin protocol. */
+-#define GOODIX_PID_REG   0x4022u
+-#define GOODIX_EVENT_REG 0x4180u
+-#define GOODIX_HEAD_LEN  8u
+-#define GOODIX_POINT_LEN 8u
++#define TOUCH_S3706      3
++#define S3706_I2C_ADDR   0x20u
+ 
+ #define SE_STATUS       0x040u
+ #define SE_MCLK         0x048u
+@@ -75,6 +74,7 @@
+ 	vm_offset_t se, gcc, gpio;
+ 	bool started, dead, probing;
+ 	int kind, irq_hint;
++	uint8_t f01_cmd, f01_ctrl, f01_data, f12_ctrl, f12_data;
+ 	uint32_t irq_status, irq_last, active;
+ 	unsigned sent, got;
+ 	int x[TOUCH_MAX], y[TOUCH_MAX];
+@@ -136,8 +136,8 @@
+ static bool
+ touch_clocks(void)
+ {
+-	/* Vote on only wrapper1 and SE7, preserving other clock users. */
+-	uint32_t mask = (0x0fu << 18) | (1u << 23);
++	/* Vote on wrapper2 AHB/core and S0 (SE17), preserving other clock users. */
++	uint32_t mask = 0x1fu;
+ 	touch_wr(st.gcc, TOUCH_GCC_VOTE, touch_rd(st.gcc, TOUCH_GCC_VOTE) | mask);
+ 	uint32_t dfs = touch_rd(st.gcc, TOUCH_RCG + 0x14u);
+ 	uint32_t cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
+@@ -160,7 +160,7 @@
+ 			return false;
+ 		}
+ 	}
+-	const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
++	const uint32_t branches[] = {0x1e004, 0x1e008, 0x1e144};
+ 	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
+ 		if (!touch_wait_clear(st.gcc, branches[i], 1u << 31)) {
+ 			printf("SWEET TOUCH: GCC branch %#x halted (%#x)\n", branches[i],
+@@ -209,16 +209,16 @@
+ 	return st.irq_last;
+ }
+ 
+-/* One Linux-style FIFO message. TX is at most 3 bytes; RX at most 90. */
++/* One Linux-style FIFO message. TX is at most 4 bytes; RX at most 90. */
+ static int
+ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+     unsigned nr, bool stretch)
+ {
+-	if (st.dead || nt > 3 || nr > 90 || (nt && nr) || (!nt && !nr)) {
++	if (st.dead || nt > 4 || nr > 90 || (nt && nr) || (!nt && !nr)) {
+ 		return EIO;
+ 	}
+ 	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
+-		st.dead = true; /* no other SE7 owner is supported */
++		st.dead = true; /* no other SE17 owner is supported */
+ 		return EBUSY;
+ 	}
+ 	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
+@@ -231,9 +231,6 @@
+ 		uint32_t irq = touch_irq();
+ 		if (irq & SE_ERRORS) {
+ 			err = (irq & SE_NACK) ? ENXIO : EIO;
+-			/* A completed NACK is normal during address probing. Aborting an
+-			 * idle sequencer may never produce ABORT_DONE. Wait for completion
+-			 * and leave a clean idle engine available for the other IC. */
+ 			for (unsigned j = 0; j < 5000 && !(irq & SE_DONE); ++j) {
+ 				delay(1);
+ 				irq = touch_irq();
+@@ -318,51 +315,10 @@
+ }
+ 
+ static int
+-touch_goodix_ack(void)
++touch_write_reg(uint8_t addr, uint8_t reg, uint8_t val)
+ {
+-	const uint8_t ack[3] = {GOODIX_EVENT_REG >> 8, GOODIX_EVENT_REG & 0xffu, 0};
+-	return touch_msg(0x5d, ack, sizeof(ack), NULL, 0, false);
+-}
+-
+-/* Raw read only: 0x8240 is the vendor's generic/older VERSION candidate,
+- * not a second accepted GT9896 identity. Never try a four-byte Berlin pointer:
+- * on this 16-bit IC the extra bytes would be register data writes. */
+-static int
+-touch_probe_info(uint16_t reg, uint8_t *buf)
+-{
+-	memset(buf, 0xa5, 32);
+-	int err = touch_read(0x5d, reg, true, buf, 32);
+-	printf("SWEET TOUCH: probe info reg=%#x len=32 err=%d irq=%#x seen=%#x\n",
+-	    reg, err, st.irq_last, st.irq_status);
+-	if (!err) {
+-		for (unsigned off = 0; off < 32; off += 16) {
+-			char line[49];
+-			for (unsigned j = 0; j < 16; ++j) {
+-				(void)snprintf(line + j * 3u, 4, "%02x ", buf[off + j]);
+-			}
+-			printf("SWEET TOUCH: probe raw %#x: %s\n", reg + off, line);
+-		}
+-	}
+-	return err;
+-}
+-
+-static unsigned
+-touch_be16(const uint8_t *p)
+-{
+-	return ((unsigned)p[0] << 8) | p[1];
+-}
+-
+-static bool
+-touch_checksum(const uint8_t *buf, unsigned len)
+-{
+-	if (len < 2) {
+-		return false;
+-	}
+-	unsigned sum = 0;
+-	for (unsigned i = 0; i + 2 < len; ++i) {
+-		sum += buf[i];
+-	}
+-	return (sum & 0xffffu) == touch_be16(buf + len - 2);
++	const uint8_t tx[2] = {reg, val};
++	return touch_msg(addr, tx, sizeof(tx), NULL, 0, false);
+ }
+ 
+ static void
+@@ -383,106 +339,105 @@
+ 	st.active = mask;
+ }
+ 
+-static int
+-touch_goodix(void)
++/*
++ * Synaptics S3706 RMI4 Page 0 PDT discovery and F12 2D touch reporting.
++ * Reversed from synaptics_driver_s3706.o (touch_get_point_data @ 0x6280):
++ *   - Page select register 0xff = 0x00 (Page 0)
++ *   - PDT descriptors at 0xe3 (F01) and 0xdd (F12):
++ *     [0]=query_base, [1]=cmd_base, [2]=ctrl_base, [3]=data_base,
++ *     [4]=intr_src_count, [5]=fn_number (0x01 / 0x12)
++ *   - Reading 1 byte at F01_DATA_BASE + 1 clears the attention IRQ.
++ *   - Reading 80 bytes at F12_DATA_BASE returns 10 x 8-byte finger objects:
++ *     type = p[0] & 0x0f (1 = finger, 2 = gloved finger)
++ *     x    = ((p[2] & 0x0f) << 8) | p[1]   (0..1079)
++ *     y    = ((p[4] & 0x0f) << 8) | p[3]   (0..2339)
++ */
++static bool
++touch_s3706_probe(void)
+ {
+-	uint8_t buf[90];
+-	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+-	uint32_t mask = 0;
+-	int err = touch_read(0x5d, GOODIX_EVENT_REG, true, buf, GOODIX_HEAD_LEN);
++	uint8_t pdt_f01[6] = {0}, pdt_f12[6] = {0}, status[2] = {0}, ctrl = 0;
++	int err = touch_write_reg(S3706_I2C_ADDR, 0xff, 0x00);
+ 	if (err) {
+-		return err;
++		printf("SWEET TOUCH: S3706 page0 select failed err=%d\n", err);
++		return false;
+ 	}
+-	if (!(buf[0] & 0x80u)) {
+-		/* Do not acknowledge firmware/config requests that we cannot service. */
+-		if (buf[0] & 0x40u) {
+-			return ENOTSUP;
+-		}
+-		return 0; /* no new touch frame: retain current contacts */
++	int e01 = touch_read(S3706_I2C_ADDR, 0xe3, false, pdt_f01, sizeof(pdt_f01));
++	int e12 = touch_read(S3706_I2C_ADDR, 0xdd, false, pdt_f12, sizeof(pdt_f12));
++	printf("SWEET TOUCH: S3706 PDT F01(err=%d fn=%#x cmd=%#x ctrl=%#x data=%#x) "
++	    "F12(err=%d fn=%#x ctrl=%#x data=%#x)\n",
++	    e01, pdt_f01[5], pdt_f01[1], pdt_f01[2], pdt_f01[3],
++	    e12, pdt_f12[5], pdt_f12[2], pdt_f12[3]);
++	if (e01 || e12) {
++		return false;
+ 	}
+-	if (!touch_checksum(buf, GOODIX_HEAD_LEN)) {
+-		return EIO; /* header untrusted: no write to the IC */
+-	}
+-	unsigned n = buf[2] & 15u;
+-	if (n > TOUCH_MAX) {
+-		(void)touch_goodix_ack();
+-		return EIO;
+-	}
+-	if (n) {
+-		err = touch_read(0x5d, GOODIX_EVENT_REG + GOODIX_HEAD_LEN, true,
+-		    buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u);
+-		if (err) {
+-			return err;
+-		}
+-		if (!touch_checksum(buf + GOODIX_HEAD_LEN, n * GOODIX_POINT_LEN + 2u)) {
+-			(void)touch_goodix_ack();
+-			return EIO;
++	if (pdt_f01[5] == 0x01u && pdt_f12[5] == 0x12u) {
++		st.f01_cmd = pdt_f01[1];
++		st.f01_ctrl = pdt_f01[2];
++		st.f01_data = pdt_f01[3];
++		st.f12_ctrl = pdt_f12[2];
++		st.f12_data = pdt_f12[3];
++	} else {
++		/* Scan PDT 0xe9 down to 0x05 by 6 bytes in case descriptors shifted. */
++		st.f01_ctrl = 0x14u;
++		st.f01_data = 0x04u;
++		st.f12_data = 0x08u;
++		for (unsigned addr = 0xe9u; addr >= 0x83u; addr -= 6u) {
++			uint8_t d[6] = {0};
++			if (touch_read(S3706_I2C_ADDR, (uint16_t)addr, false, d, sizeof(d)) ||
++			    d[5] == 0x00u || d[5] == 0xffu) {
++				break;
++			}
++			if (d[5] == 0x01u) {
++				st.f01_cmd = d[1];
++				st.f01_ctrl = d[2];
++				st.f01_data = d[3];
++			} else if (d[5] == 0x12u) {
++				st.f12_ctrl = d[2];
++				st.f12_data = d[3];
++			}
+ 		}
+ 	}
+-	for (unsigned i = 0; i < n; ++i) {
+-		const uint8_t *p = buf + GOODIX_HEAD_LEN + i * GOODIX_POINT_LEN;
+-		unsigned id = p[0] >> 4;
+-		unsigned px = touch_be16(p + 2), py = touch_be16(p + 4);
+-		/* Low nibble 1/3 denotes pen data in the vendor parser. */
+-		if ((p[0] & 15u) == 1u || (p[0] & 15u) == 3u || id >= TOUCH_MAX ||
+-		    (mask & (1u << id)) || px > 1079 || py > 2399) {
+-			(void)touch_goodix_ack();
+-			return EIO;
+-		}
+-		mask |= 1u << id;
+-		x[id] = (int)px;
+-		y[id] = (int)py;
++	/* Clear pending reset/status IRQ and place F01 into normal configured mode. */
++	(void)touch_read(S3706_I2C_ADDR, st.f01_data, false, status, sizeof(status));
++	if (!touch_read(S3706_I2C_ADDR, st.f01_ctrl, false, &ctrl, 1)) {
++		ctrl = (uint8_t)((ctrl & ~0x03u) | 0x80u);
++		(void)touch_write_reg(S3706_I2C_ADDR, st.f01_ctrl, ctrl);
+ 	}
+-	err = touch_goodix_ack();
+-	if (!err) {
+-		touch_report(mask, x, y);
+-	}
+-	return err;
++	printf("SWEET TOUCH: S3706 ready f01_ctrl=%#x f01_data=%#x f12_data=%#x status=%#x:%#x\n",
++	    st.f01_ctrl, st.f01_data, st.f12_data, status[0], status[1]);
++	return true;
+ }
+ 
+ static int
+-touch_focaltech(void)
++touch_s3706(void)
+ {
+-	uint8_t buf[63];
++	uint8_t irq_sts = 0;
++	uint8_t buf[TOUCH_MAX * 8u];
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+-	uint32_t mask = 0, seen = 0;
+-	int err = touch_read(0x38, 0, false, buf, sizeof(buf));
++	uint32_t mask = 0;
++
++	/* Reading F01_DATA_BASE + 1 clears the interrupt status register. */
++	int err = touch_read(S3706_I2C_ADDR, (uint16_t)(st.f01_data + 1u), false, &irq_sts, 1);
+ 	if (err) {
+ 		return err;
+ 	}
+-	unsigned n = buf[2] & 15u, active = 0;
+-	if ((buf[0] & 0x70u) || n > TOUCH_MAX) {
+-		return EIO;
++	err = touch_read(S3706_I2C_ADDR, st.f12_data, false, buf, sizeof(buf));
++	if (err) {
++		return err;
+ 	}
+ 	for (unsigned i = 0; i < TOUCH_MAX; ++i) {
+-		const uint8_t *p = buf + 3u + 6u * i;
+-		unsigned id = p[2] >> 4, event = p[0] >> 6;
+-		if (id >= TOUCH_MAX) {
+-			break; /* vendor's unused-record sentinel */
++		const uint8_t *p = buf + i * 8u;
++		uint8_t type = p[0] & 0x0fu;
++		if (type == 1u || type == 2u) {
++			unsigned px = ((unsigned)(p[2] & 0x0fu) << 8) | p[1];
++			unsigned py = ((unsigned)(p[4] & 0x0fu) << 8) | p[3];
++			if (px <= 1079u && py <= 2339u) {
++				mask |= 1u << i;
++				x[i] = (int)px;
++				y[i] = (int)py;
++			}
+ 		}
+-		if (seen & (1u << id)) {
+-			return EIO;
+-		}
+-		seen |= 1u << id;
+-		if (event == 1u) {
+-			continue; /* UP record */
+-		}
+-		if (event == 3u) {
+-			return EIO;
+-		}
+-		unsigned px = ((unsigned)(p[0] & 15u) << 8) | p[1];
+-		unsigned py = ((unsigned)(p[2] & 15u) << 8) | p[3];
+-		if (px > 1079 || py > 2399) {
+-			return EIO;
+-		}
+-		mask |= 1u << id;
+-		x[id] = (int)px;
+-		y[id] = (int)py;
+-		++active;
+ 	}
+-	if (active != n) {
+-		return EIO;
+-	}
+ 	touch_report(mask, x, y);
+ 	return 0;
+ }
+@@ -492,7 +447,7 @@
+ {
+ 	uint32_t fw = touch_rd(st.se, SE_FW);
+ 	uint32_t tx = touch_rd(st.se, SE_HW_TX), rx = touch_rd(st.se, SE_HW_RX);
+-	printf("SWEET TOUCH: se7 fw=%#x proto=%u status=%#x tx=%#x rx=%#x ios=%#x\n",
++	printf("SWEET TOUCH: se17 fw=%#x proto=%u status=%#x tx=%#x rx=%#x ios=%#x\n",
+ 	    fw, (fw >> 8) & 0xffu, touch_rd(st.se, SE_STATUS), tx, rx,
+ 	    touch_rd(st.se, 0x908));
+ 	if (((fw >> 8) & 0xffu) != 3u || (touch_rd(st.se, 0x64) & 1u) ||
+@@ -502,7 +457,7 @@
+ 		return false;
+ 	}
+ 	if (touch_rd(st.se, SE_STATUS) & 0x1001u) {
+-		printf("SWEET TOUCH: SE7 already busy; probes skipped\n");
++		printf("SWEET TOUCH: SE17 already busy; probes skipped\n");
+ 		return false;
+ 	}
+ 	touch_wr(st.se, 0xe18, 0); /* no GSI events */
+@@ -558,9 +513,9 @@
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
+-	printf("SWEET TOUCH: mapping GCC/TLMM/SE7\n");
++	printf("SWEET TOUCH: mapping GCC/TLMM-SOUTH/SE17\n");
+ 	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x60000);
+-	st.gpio = ml_io_map(TOUCH_NORTH_PA, 0x5b000);
++	st.gpio = ml_io_map(TOUCH_SOUTH_PA, 0x80000);
+ 	st.se = ml_io_map(TOUCH_SE_PA, 0x4000);
+ 	if (!st.gcc || !st.gpio || !st.se) {
+ 		printf("SWEET TOUCH: MMIO mapping failed\n");
+@@ -569,53 +524,43 @@
+ 	if (!touch_clocks() || !touch_se_init()) {
+ 		goto out;
+ 	}
+-	printf("SWEET TOUCH: TLMM reset=%#x irq=%#x vdd90=%#x; voting L11C through RPMh\n",
+-	    touch_rd(st.gpio, TOUCH_GPIO_IO(8)), touch_rd(st.gpio, TOUCH_GPIO_IO(9)),
+-	    touch_rd(st.gpio, TOUCH_GPIO_IO(90)));
+-	/* Keep the IC in reset while its rails settle; IRQ stays an input. */
+-	touch_gpio(9, 0, 3, 3, false, false); /* IRQ input, 8 mA, pull-up */
+-	touch_gpio(8, 0, 3, 3, true, false);
+-	int power_error = sweet_rpmh_vreg_enable("ldoc11", 3200);
++	printf("SWEET TOUCH: TLMM reset54=%#x irq122=%#x vdd119=%#x; voting L17A through RPMh\n",
++	    touch_rd(st.gpio, TOUCH_GPIO_IO(54)), touch_rd(st.gpio, TOUCH_GPIO_IO(122)),
++	    touch_rd(st.gpio, TOUCH_GPIO_IO(119)));
++	/* Keep S3706 in reset while its rails settle; IRQ 122 stays an input. */
++	touch_gpio(122, 0, 3, 0, false, false); /* IRQ input, 2 mA, pull-up */
++	touch_gpio(54, 0, 3, 3, true, false);   /* Reset active-low */
++	int power_error = sweet_rpmh_vreg_enable("ldoa17", 3008);
+ 	if (power_error) {
+-		printf("SWEET TOUCH: L11C RPMh enable failed %d; probes skipped\n", power_error);
++		printf("SWEET TOUCH: L17A RPMh enable failed %d; probes skipped\n", power_error);
+ 		goto out;
+ 	}
+-	touch_gpio(90, 0, 0, 0, true, true); /* board digital power enable */
+-	touch_wait(10); /* conservative rail settling; not a DT timing value */
+-	touch_gpio(6, 1, 0, 0, false, false); /* qup11 SDA/SCL, 2 mA */
+-	touch_gpio(7, 1, 0, 0, false, false);
+-	/* Vendor GT9896 dev_confirm: reset low 2 ms, then high. */
+-	touch_gpio(8, 0, 3, 3, true, false);
+-	touch_wait(2);
+-	touch_gpio(8, 0, 3, 3, true, true);
+-	touch_wait(300); /* exceeds vendor 5 ms test + 95 ms post-test wait */
+-	uint8_t gid[32], legacy[32], fid1 = 0, fid2 = 0;
++	touch_gpio(119, 0, 0, 1, true, true);   /* GM1901 tp_1v8 digital rail enable */
++	touch_wait(10);
++	touch_gpio(55, 1, 0, 0, false, false);  /* SE17 I2C SDA, mux=1, 2 mA */
++	touch_gpio(56, 1, 0, 0, false, false);  /* SE17 I2C SCL, mux=1, 2 mA */
++	/* Release reset and wait for S3706 RMI4 firmware boot. */
++	touch_gpio(54, 0, 3, 3, true, false);
++	touch_wait(10);
++	touch_gpio(54, 0, 3, 3, true, true);
++	touch_wait(150);
+ 	st.probing = true;
+-	int ge = touch_probe_info(GOODIX_PID_REG, gid);
+-	printf("SWEET TOUCH: probe 0x5d err=%d pid=%02x%02x%02x%02x fw=%02x.%02x.%02x.%02x irq=%#x\n",
+-	    ge, gid[0], gid[1], gid[2], gid[3], gid[8], gid[9], gid[10], gid[11], st.irq_status);
+-	(void)touch_probe_info(0x8240, legacy);
+-	int fe1 = touch_read(0x38, 0xa3, false, &fid1, 1);
+-	int fe2 = touch_read(0x38, 0x9f, false, &fid2, 1);
+-	printf("SWEET TOUCH: probe 0x38 err=%d/%d chip-id=%02x:%02x irq=%#x\n",
+-	    fe1, fe2, fid1, fid2, st.irq_status);
++	bool s3706 = touch_s3706_probe();
+ 	st.probing = false;
+-	bool goodix = !ge && gid[0] == '9' && gid[1] == '8' && gid[2] == '9' && gid[3] == '6';
+-	bool fts = !fe1 && !fe2 && fid1 == 0x54 && fid2 == 0x52;
+-	if (st.dead || goodix == fts) {
+-		printf("SWEET TOUCH: no unique supported IC (goodix=%d fts=%d dead=%d); stopping\n",
+-		    goodix, fts, st.dead);
++	if (st.dead || !s3706) {
++		printf("SWEET TOUCH: S3706 probe failed (s3706=%d dead=%d); stopping\n",
++		    s3706, st.dead);
+ 		goto out;
+ 	}
+-	st.kind = goodix ? TOUCH_GOODIX : TOUCH_FTS;
+-	printf("SWEET TOUCH: selected %s, 1080x2400, poll=10ms irq-hint=%d\n",
+-	    goodix ? "GT9896 Yellowstone" : "Focaltech 54:52", st.irq_hint);
++	st.kind = TOUCH_S3706;
++	printf("SWEET TOUCH: selected Synaptics S3706 RMI4, 1080x2340, poll=10ms irq-hint=%d\n",
++	    st.irq_hint);
+ 	unsigned errors = 0, ticks = 0;
+ 	while (!st.dead) {
+ 		/* Optional IRQ hint still reads every 100ms, and always while down. */
+-		if (!st.irq_hint || st.active || !(touch_rd(st.gpio, TOUCH_GPIO_IO(9)) & 1u) ||
++		if (!st.irq_hint || st.active || !(touch_rd(st.gpio, TOUCH_GPIO_IO(122)) & 1u) ||
+ 		    (++ticks % 10u) == 0) {
+-			int err = st.kind == TOUCH_GOODIX ? touch_goodix() : touch_focaltech();
++			int err = touch_s3706();
+ 			if (err) {
+ 				if ((errors++ % 100u) == 0) {
+ 					printf("SWEET TOUCH: report err=%d irq=%#x\n", err, st.irq_status);
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -54,10 +54,10 @@
+ 	{ "master", 0x0f010 },
+ 	{ "sleep", 0x0f014 },
+ 	{ "utmi", 0x0f018 },
+-	{ "cfg-noc-axi", 0x0502c },
+-	{ "aggre-axi", 0x8201c },
++	{ "cfg-noc-axi", 0x0f078 },
++	{ "aggre-axi", 0x0f07c },
+ 	{ "ahb2phy", 0x6a004 },
+-	{ "clkref", 0x8c010 },
++	{ "clkref", 0x8c008 },
+ };
+ 
+ #define DWC3_PA                 0x0a600000
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -435,9 +435,9 @@
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? 2400 : 2436;
++	fLogicalH = native ? 2340 : 2436;
+ 	fOffX = (fLogicalW - 1080) / 2;
+-	fOffY = (fLogicalH - 2400) / 2;
++	fOffY = (fLogicalH - 2340) / 2;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ 	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
+@@ -459,7 +459,7 @@
+ 		return;
+ 	}
+ 	x = x < 0 ? 0 : (x > 1079 ? 1079 : x);
+-	y = y < 0 ? 0 : (y > 2399 ? 2399 : y);
++	y = y < 0 ? 0 : (y > 2339 ? 2339 : y);
+ 
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+@@ -473,7 +473,7 @@
+ 	}
+ 	if (!was && down) {
+ 		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+-		    y < SWEET_TOUCH_EDGE_PX || y > 2399 - SWEET_TOUCH_EDGE_PX;
++		    y < SWEET_TOUCH_EDGE_PX || y > 2339 - SWEET_TOUCH_EDGE_PX;
+ 	}
+ 
+ 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);

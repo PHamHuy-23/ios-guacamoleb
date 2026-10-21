@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
+"""Build the minimal Apple Device Tree that the GM1901 (SM8150) xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the OnePlus 7 (GM1901, Snapdragon 855 / SM8150) FDT.
+Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
 """
 import hashlib, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
 
-# Kernel-managed RAM: above every Qualcomm XPU carve-out (see NOTES.md)
+# Kernel-managed RAM: above every Qualcomm XPU carve-out (last fixed carve-out
+# on GM1901 SM8150 is cdsp_sec_regions at 0xa4c00000..0xa8800000; see NOTES.md)
 PHYS_BASE = 0xb0000000
 MEM_SIZE = 0x4d000000
-# --highmem (phone only): the whole upper DDR bank. The live FDT memory node is
-# <0x80000000 2G>, <0x1_00000000 0xfcc00000>; every fixed reserved-memory
-# carve-out is in the low bank and the dynamic pools are limited below 4G.
+# --highmem (phone only): upper DDR bank at 0x1_00000000; every fixed
+# reserved-memory carve-out is in the low bank and dynamic pools are below 4G.
 HIGH_PHYS_BASE = 0x100000000
 HIGH_MEM_SIZE = 0xfcc00000
 # /arm-io children are relative to this; it must not be 0 (serial_init bails)
@@ -22,10 +23,10 @@ SOC_BASE = 0x01000000
 
 GICD, GICD_SIZE = 0x17a00000, 0x10000
 GICR, GICR_SIZE = 0x17a60000, 0x100000
-FB, FB_SIZE = 0x9c000000, 0x1700000
-SWEET_ECID = 0x5357454554000001  # 'SWEET' + 1, synthetic
-FB_W, FB_H, FB_STRIDE = 1080, 2400, 1080 * 4
-# Internal UFS host (ufshc@1d84000 "ufs_mem"); QEMU virt has none
+FB, FB_SIZE = 0x9c000000, 0x2400000
+SWEET_ECID = 0x5357454554000001  # 'SWEET' + 1, synthetic (preserves IOPlatformUUID)
+FB_W, FB_H, FB_STRIDE = 1080, 2340, 1080 * 4
+# Internal UFS host (ufshc@1d84000 "ufs_mem" on SM8150); QEMU virt has none
 UFS, UFS_SIZE = 0x01d84000, 0x3000
 TIMEBASE = 19200000
 VTIMER_INTID = 19
@@ -119,16 +120,23 @@ def build(seed=None, qemu=False, highmem=False):
         # with CSR_ALLOW_UNRESTRICTED_FS (vm_unix.c shared region checks).
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
-    # SWEET SMP: all eight cores in physical-core order (0-5 Cortex-A55,
-    # 6-7 Cortex-A76), one homogeneous cluster. The kernel defaults to one
-    # and uses cpus=N to select an initial prefix (N <= 8).
-    # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
+    # GM1901 (SM8150) SMP: all eight cores in physical-core order (0-3 Kryo 485
+    # Silver Cortex-A55, 4-6 Kryo 485 Gold Cortex-A76, 7 Kryo 485 Gold Prime
+    # Cortex-A76), one homogeneous cluster. The kernel defaults to one and uses
+    # cpus=N to select an initial prefix (N <= 8).
+    # QEMU retains its original single-CPU tree: its MPIDRs differ from SM8150.
     cpu_nodes = []
     for core in range(1 if qemu else 8):
+        if core == 7:
+            cpu_freq = 2841600000
+        elif core >= 4:
+            cpu_freq = 2419200000
+        else:
+            cpu_freq = 1785600000
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
             ('device_type', cstr('cpu')),
-            ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
+            ('compatible', cstr('qcom,kryo485') + cstr('ARM,v8')),
             ('reg', u32(core << 8)),  # actual MPIDR Aff1:Aff0, NOT logical ID
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
             ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
@@ -139,9 +147,9 @@ def build(seed=None, qemu=False, highmem=False):
             ('l3-cache-id', u32(0)),     # shared L3
             ('state', cstr('running' if core == 0 else 'stopped')),
             ('timebase-frequency', u32(timebase)),
-            ('clock-frequency', u32(2304000000 if core >= 6 else 1804800000)),
+            ('clock-frequency', u32(cpu_freq)),
             ('bus-frequency', u32(100000000)),
-            ('memory-frequency', u32(1866000000)),
+            ('memory-frequency', u32(2133000000)),
             ('peripheral-frequency', u32(timebase)),
             ('fixed-frequency', u32(timebase)),
         ]))
@@ -214,10 +222,11 @@ def build(seed=None, qemu=False, highmem=False):
 
     # Identity of the iPhone X whose userland runs here: compatible[0] is
     # hw.model/hw.target (D22AP), model is hw.machine/hw.product
-    # (iPhone10,3). 'xiaomi,sweet' stays for SweetPlatformExpert matching.
+    # (iPhone10,3). 'xiaomi,sweet' stays for SweetPlatformExpert matching
+    # alongside 'oneplus,gm1901' and 'qcom,sm8150'.
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + cstr('qcom,sm7150') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('oneplus,gm1901') + cstr('xiaomi,sweet') + cstr('qcom,sm8150') + cstr('AppleARM')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
@@ -230,6 +239,7 @@ def build(seed=None, qemu=False, highmem=False):
 if __name__ == '__main__':
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
     blob = adt.serialize(root)
+    os.makedirs(os.path.dirname(os.path.abspath(sys.argv[1])), exist_ok=True)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:
         adt.dump(adt.parse(blob)[0])

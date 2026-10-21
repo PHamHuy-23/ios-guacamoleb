@@ -6,7 +6,12 @@ Repository này xuất phát từ bản bring-up iOS 16.7.16 trên nền Qualcom
 
 > **Tình trạng hiện tại (2026-10-21):**
 > - **Đã hoàn tất giải nén firmware & dịch ngược driver của máy GM1901** từ ROM gốc OxygenOS (`OnePlus7Oxygen_14.O.11` / `14.O.22`) và Evolution X (`Android 16`), sử dụng công cụ tách DTB/DTBO (`dtb_02.dtb`, `dtbo_20.dtb` cho `project-id = 0x49a9` / `18857`), UEFI `LinuxLoader.efi` (`abl.img`) và **MCP REA** trên kernel `Image` của GM1901.
-> - **Chưa nạp/boot thử trên phần cứng OnePlus 7 thật:** mã nguồn trong `shim/`, `tools/mkadt.py` và `xnu/patches/` hiện vẫn đang giữ các hằng số mặc định của nền `sweet` (SM7150) và đang ở bước chuẩn bị áp bản vá phần cứng GM1901 (SM8150) theo bảng ánh xạ đã xác minh bên dưới.
+> - **Đã cập nhật bộ công cụ khởi động (`shim/` & `tools/mkadt.py`) sang thông số OnePlus 7 (`GM1901`):**
+>   - [`shim/shim.c`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/shim.c): cập nhật `IMEM_RESTART_REASON = 0x146bf65c` (`imem@146bf000 + 0x65c` trên SM8150).
+>   - [`shim/console.h`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/console.h): cập nhật độ phân giải framebuffer vật lý `1080×2340` (`FB_W = 1080`, `FB_H = 2340`, `FB_STRIDE = 4320`, `FB_BASE = 0x9c000000`).
+>   - [`tools/mkadt.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkadt.py): cập nhật framebuffer `1080×2340` (`36 MiB`), cấu hình 8 nhân `qcom,kryo485` (4 nhân Silver 1,78 GHz + 3 nhân Gold 2,42 GHz + 1 nhân Prime 2,84 GHz) và định danh `oneplus,gm1901` / `qcom,sm8150`.
+>   - [`shim/build.sh`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/build.sh): hỗ trợ biên dịch trực tiếp trên **macOS** (dùng `clang -target aarch64-none-elf`) lẫn **Linux** (`aarch64-linux-gnu-gcc`), tự động trích xuất DTB của GM1901 và đóng gói đồng thời 2 ảnh khởi động: `shim/out/shim-boot.img` (chuẩn Header v2 cho Evolution X / OOS 11–12) và `shim/out/shim-boot-oos.img` (chuẩn Header v1 + `UNCOMPRESSED_IMG` cho OxygenOS 9/10 gốc).
+> - **Đã tạo và kiểm tra bản vá kernel XNU cho GM1901 ([`xnu/patches/0082-gm1901-drivers.patch`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches/0082-gm1901-drivers.patch)):** cập nhật trình điều khiển cảm ứng Synaptics S3706 RMI4 (`bsd/dev/sweet_touch.c`), nút cứng PM8150 SID 0 GPIO6/GPIO7 (`bsd/dev/sweet_keys.c`), nguồn `"ldoa17"` `3008` mV (`bsd/dev/sweet_rpmh.c`), clock GCC USB SM8150 (`bsd/dev/sweet_usb.c`), cùng chiều cao panel `2340` và cử chỉ vuốt cạnh dưới (`osfmk/arm64/sweet_early.c`, `iokit/Kernel/arm/hid/SweetHID.cpp`).
 > - Đây là bản bring-up thử nghiệm. Khi cài đặt rootfs iOS vào phân vùng `userdata`, **toàn bộ dữ liệu người dùng Android sẽ bị xóa** (các phân vùng bootloader, recovery, modem, persist được giữ nguyên).
 
 ---
@@ -15,15 +20,15 @@ Repository này xuất phát từ bản bring-up iOS 16.7.16 trên nền Qualcom
 
 | Hạng mục | Trạng thái trên nền tảng XNU hiện có | Tình trạng tương thích / Cổng chuyển sang OnePlus 7 (`GM1901`) |
 | --- | --- | --- |
-| **Khởi động (`shim/`)** | Bootloader Qualcomm ABL → `fastboot boot` shim → XNU Mach-O + ADT | **Đã xác minh định dạng:** ROM OxygenOS gốc dùng `boot.img` header v1 (kernel kèm header 20 byte `UNCOMPRESSED_IMG` + `dtb_02.dtb` nối đuôi); ROM Evolution X dùng `boot.img` header v2 (`--dtb_offset 0x1f00000`). Cần đổi địa chỉ `IMEM_RESTART` trong `shim/shim.c` sang `0x146bf65c` |
+| **Khởi động (`shim/`)** | Bootloader Qualcomm ABL → `fastboot boot` shim → XNU Mach-O + ADT | **Đã cập nhật cho GM1901:** `IMEM_RESTART = 0x146bf65c`, màn hình `1080×2340`; `shim/build.sh` tự động tạo cả `shim-boot.img` (Header v2 cho Evolution X / OOS 11–12) và `shim-boot-oos.img` (Header v1 + `UNCOMPRESSED_IMG` cho OOS 9/10) |
 | **GICv3 & Timer** | GICv3 (`GICD = 0x17a00000`, `GICR = 0x17a60000`, stride `0x20000`), timer 19,2 MHz (PPI 19) | **Tương thích 100% với SM8150** — địa chỉ thanh ghi, kích thước vùng nhớ và ngắt giống hệt |
-| **CPU / SMP** | Đa nhân qua PSCI `CPU_ON`, trang nhớ 16K (`cpus=8`, bản vá `0065`, `0078`) | **Tương thích sơ đồ MPIDR (`core << 8`):** GM1901 có 8 nhân Kryo 485 (`cpu@0..300` Silver A55, `cpu@400..600` Gold A76, `cpu@700` Gold Prime A76) |
+| **CPU / SMP** | Đa nhân qua PSCI `CPU_ON`, trang nhớ 16K (`cpus=8`, bản vá `0065`, `0078`) | **Đã cập nhật trong `mkadt.py`:** 8 nhân Kryo 485 (`cpu@0..300` Silver A55, `cpu@400..600` Gold A76, `cpu@700` Gold Prime A76), sơ đồ MPIDR (`core << 8`) |
 | **Lưu trữ UFS** | Trình điều khiển UFSHCI riêng (`bsd/dev/sweet_ufs.c`), mount HFS+ đọc/ghi từ `userdata` | **Tương thích 100% với SM8150:** `UFS_BASE = 0x01d84000`, kích thước `0x2500`, IRQ `GIC_SPI 265` (`0x109`) giống hệt |
-| **Màn hình (`AppleCLCD`)** | IOSurface + IOMobileFramebuffer dựng hình CPU, hiển thị canvas iPhone X `1125×2436`, tắt/bật màn hình qua nút nguồn (`0079`) | **Cần cập nhật chiều cao panel:** GM1901 dùng vùng splash `0x9c000000` (`36 MiB`), panel Samsung `s6e3fc2x01_cmd` / `sofef03f_m` độ phân giải vật lý **`1080×2340`** (stride `4320`), thay cho `1080×2400` |
-| **Nguồn RPMh (`sweet_rpmh.c`)** | Điều khiển LDO qua RSC (`0x18220000`), TCS (`0x18220d00`), Cmd-DB (`0x0c3f000c`), DRV 2, ACTIVE TCS 2 (`0062`) | **Thanh ghi RPMh & Cmd-DB giống 100%:** trên GM1901 chỉ cần đổi tên nguồn cảm ứng sang **`"ldoa17"`** (`pm8150_l17`) ở mức áp **`3008` mV** |
-| **Phím cứng (`sweet_keys.c`)** | Đọc trạng thái thời gian thực PMIC qua SPMI arbiter v5 (`0x0c440000` / `0x0e600000` / `0x0c40a000`) (`0060`) | **SPMI giống 100%, cần đổi PPID nút âm lượng:** Power = SID 0 `pon@800` (`0x008` bit 0); **Vol+ = SID 0 GPIO6 (`0x0c5`, `0xc510` bit 0 active-low)**; **Vol- = SID 0 GPIO7 (`0x0c6`, `0xc610` bit 0 active-low) / `0x008` bit 1**. Cần gạt Alert Slider nối vào TLMM GPIO 27 / 125 / 134 |
-| **Cảm ứng (`sweet_touch.c`)** | Khung GENI I²C + dịch vụ HID digitizer (`SweetHIDTouch`, hỗ trợ vuốt cạnh về Home ở `0071`) | **Đã dịch ngược xong bằng MCP REA, cần thay giao thức sang Synaptics S3706:** bus `/soc/i2c@0xc80000` (`qupv3_se17_i2c`), địa chỉ **`0x20`**, clock GCC `0x52014` + `0x1e144`, TLMM `SOUTH` (`0x03d00000`) GPIO 54 (Reset), 55 (SDA), 56 (SCL), 119 (1.8V), 122 (IRQ), giao thức RMI4 Page 0 (`F01` / `F12`) |
-| **USB & Mạng (`sweet_usb.c`)** | DWC3 device mode (`0074`), mạng USB CDC-ECM `ue0` (`192.168.7.2/24`, `0075`–`0076`), truyền log trực tiếp qua UDP cổng `5140` (`0077`) | **Tương thích 100% với SM8150:** DWC3 core `0x0a600000`, QSCRATCH `0x0a6f8800`, QUSB2 PHY `0x088e2000` và các thanh ghi GCC `USB30_PRIM` (`0x0f004..0x0f018`) giống hệt |
+| **Màn hình (`AppleCLCD`)** | IOSurface + IOMobileFramebuffer dựng hình CPU, hiển thị canvas iPhone X `1125×2436`, tắt/bật màn hình qua nút nguồn (`0079`) | **Đã cập nhật cho GM1901 (`1080×2340`, `36 MiB`):** trong `shim/console.h`, `tools/mkadt.py`, `sweet_early.c` và `SweetHID.cpp` (`0082`) |
+| **Nguồn RPMh (`sweet_rpmh.c`)** | Điều khiển LDO qua RSC (`0x18220000`), TCS (`0x18220d00`), Cmd-DB (`0x0c3f000c`), DRV 2, ACTIVE TCS 2 (`0062`) | **Đã cập nhật trong `0082`:** bật nguồn cảm ứng **`"ldoa17"`** (`pm8150_l17`) ở mức áp **`3008` mV** |
+| **Phím cứng (`sweet_keys.c`)** | Đọc trạng thái thời gian thực PMIC qua SPMI arbiter v5 (`0x0c440000` / `0x0e600000` / `0x0c40a000`) (`0060`) | **Đã cập nhật trong `0082`:** Power = SID 0 `pon@800` (`0x008` bit 0); **Vol+ = SID 0 GPIO6 (`0x0c5`, `0xc510` bit 0 active-low)**; **Vol- = SID 0 GPIO7 (`0x0c6`, `0xc610` bit 0 active-low) / `0x008` bit 1** |
+| **Cảm ứng (`sweet_touch.c`)** | Khung GENI I²C + dịch vụ HID digitizer (`SweetHIDTouch`, hỗ trợ vuốt cạnh về Home ở `0071`) | **Đã cập nhật sang Synaptics S3706 trong `0082`:** bus `/soc/i2c@0xc80000` (`qupv3_se17_i2c`), địa chỉ **`0x20`**, clock GCC `0x52014` + `0x1e144`, TLMM `SOUTH` (`0x03d00000`) GPIO 54 (Reset), 55 (SDA), 56 (SCL), 119 (1.8V), 122 (IRQ), giao thức RMI4 Page 0 (`F01` / `F12`) |
+| **USB & Mạng (`sweet_usb.c`)** | DWC3 device mode (`0074`), mạng USB CDC-ECM `ue0` (`192.168.7.2/24`, `0075`–`0076`), truyền log trực tiếp qua UDP cổng `5140` (`0077`) | **Đã cập nhật trong `0082`:** DWC3 `0x0a600000`, QSCRATCH `0x0a6f8800`, QUSB2 PHY `0x088e2000`, và các thanh ghi GCC `USB30_PRIM` của SM8150 (`cfg-noc-axi = 0x0f078`, `aggre-axi = 0x0f07c`, `clkref = 0x8c008`) |
 | **Userland iOS 16.7.16** | Hệ thống tệp gốc và shared cache iPhone X (`iPhone10,3` / `D22AP`), Hactivation, SpringBoard, Cài đặt, điều hướng cử chỉ (`0070`–`0071`) | **Dùng chung hoàn toàn** image phân vùng gốc HFS+ (`ios16-root-20H392`) |
 
 ---
@@ -65,88 +70,178 @@ Các tệp ROM/firmware của OnePlus 7 (`GM1901`) đang có trong máy (đã đ
 
 ---
 
-## Hướng dẫn chuẩn bị & thực hiện
+## Hướng dẫn sử dụng chi tiết cho OnePlus 7 (`GM1901`)
 
-Bạn cần máy **OnePlus 7 (`GM1901`, SM8150)** đã **mở khóa bootloader**, máy tính (macOS/Linux) và tài khoản GitHub để build kernel. **Toàn bộ dữ liệu trong `userdata` sẽ bị xóa khi flash rootfs iOS.** Các phân vùng bootloader, recovery, modem và persist không bị động đến.
+Bạn cần máy **OnePlus 7 (`GM1901`, SM8150)** đã **mở khóa bootloader**, máy tính **macOS** (có sẵn Xcode Command Line Tools + `python3`) hoặc **Linux**, cùng công cụ `fastboot`/`adb`.
 
-### 0. Sao lưu điện thoại
+---
 
-Trước khi can thiệp vào `userdata`, hãy khởi động tạm thời vào recovery có hỗ trợ `adb` (TWRP / OrangeFox / Lineage Recovery cho `guacamoleb`) và sao lưu ít nhất các phân vùng `persist`, `modemst1`, `modemst2`, `fsg`, `fsc`, `boot_a`/`boot_b`, `dtbo_a`/`dtbo_b`, `vbmeta_a`/`vbmeta_b`. Không đưa các bản sao lưu này vào git (`.gitignore` đã loại trừ `backup/`, `dtb/`, `recovery/`, `research/`, `default-img/`, `evolutionX-rom/`).
+### Bước 0. Sao lưu các phân vùng quan trọng của máy (Bắt buộc trước khi đụng vào `userdata`)
 
-### 1. Build kernel XNU
-
-Kernel được build trên runner macOS của GitHub bằng [blacktop/darwin-xnu-build](https://github.com/blacktop/darwin-xnu-build). Workflow tải `xnu-8796`, lần lượt áp dụng các bản vá trong [`xnu/patches/`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches), đồng thời chuẩn bị mã nguồn `libpthread`, `HFS` và `BearSSL` mã nguồn mở đã được ghim phiên bản:
+Trước khi flash bất kỳ thứ gì vào `userdata`, hãy khởi động tạm vào recovery có `adb` (TWRP / OrangeFox / Lineage Recovery) và sao lưu các phân vùng nhạy cảm chứa IMEI, hiệu chuẩn cảm biến/vân tay và bootloader:
 
 ```sh
+mkdir -p backup
+for part in persist modemst1 modemst2 fsg fsc boot_a boot_b dtbo_a dtbo_b vbmeta_a vbmeta_b; do
+    adb shell "dd if=/dev/block/by-name/$part" > "backup/${part}.img"
+done
+```
+
+> **Lưu ý:** Không bao giờ đưa thư mục `backup/` vào git (`.gitignore` đã tự động chặn).
+
+---
+
+### Bước 1. Build và chạy thử Boot Shim chẩn đoán (An toàn 100% — Không ghi vào ổ cứng)
+
+Khi chạy [`./shim/build.sh`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/build.sh) **không truyền tham số**, script sẽ tạo một boot image chẩn đoán (không kèm XNU). Khi `fastboot boot` ảnh này, máy sẽ:
+1. Xóa màn hình `1080×2340` sang nền đỏ chữ vàng/trắng.
+2. Đọc thử bảng phân vùng GPT trên chip nhớ UFS (`0x01d84000`) ở chế độ **chỉ đọc (read-only)** và in danh sách các phân vùng lớn (`userdata`, v.v.) lên màn hình điện thoại.
+3. Giữ kết quả trên màn hình ~3 phút rồi tự động khởi động lại về `fastboot` (nhờ ghi `0x77665500` vào `IMEM_RESTART_REASON = 0x146bf65c`).
+
+Chạy lệnh sau trên máy Mac của bạn:
+
+```sh
+./shim/build.sh
+```
+
+Script sẽ tự động biên dịch mã nguồn trong [`shim/`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim), kiểm tra layout màn hình qua `shim/out/host_test` (xuất ảnh mẫu `shim/out/host.ppm` kích thước `1080×2340`), trích xuất DTB từ thư mục `default-img/` và `evolutionX-rom/`, rồi sinh ra **2 file boot image**:
+
+| File đầu ra | Định dạng đóng gói | Khi nào sử dụng? |
+| --- | --- | --- |
+| `shim/out/shim-boot.img` | Android Boot Header **v2** (`dtb_offset = 0x1f00000`, lấy DTB từ `evolutionX-rom/boot.img`) | Dùng khi máy bạn đang chạy **Evolution X** hoặc firmware **OxygenOS 11 / 12** |
+| `shim/out/shim-boot-oos.img` | Android Boot Header **v1** + tiền tố 20 byte `UNCOMPRESSED_IMG` + DTB nối đuôi (lấy từ `default-img/OnePlus7Oxygen_14.O.11...`) | Dùng khi máy bạn đang ở bootloader **OxygenOS 9 / 10** gốc (`14.O.11` / `14.O.22`) |
+
+Để khởi động thử nghiệm (tạm thời trên RAM, không làm mất Android):
+```sh
+# Đưa OnePlus 7 về chế độ Fastboot (nhấn giữ Nguồn + Tăng âm lượng hoặc adb reboot bootloader)
+fastboot boot shim/out/shim-boot.img
+# Nếu bootloader báo lỗi DTB trên nền OxygenOS 9/10 cũ, dùng file OOS:
+fastboot boot shim/out/shim-boot-oos.img
+```
+
+---
+
+### Bước 2. Tạo Apple Device Tree (`gm1901.adt`) cho OnePlus 7
+
+`MobileGestalt` của iOS 16 cần node `/product` từ DeviceTree gốc của iPhone X (`d22ap.adt`) để nhận diện đúng thiết bị Face ID không có nút Home.
+
+1. **Trích xuất `d22ap.adt` từ IPSW iPhone X (`20H392`) — chỉ cần làm 1 lần:**
+   ```sh
+   python3 tools/remotezip.py IPSW_URL DeviceTree.d22ap.im4p research/ipsw-x/dt
+   ipsw img4 im4p extract research/ipsw-x/dt/Firmware/all_flash/DeviceTree.d22ap.im4p -o research/ipsw-x/d22ap.adt
+   ```
+2. **Tạo file `shim/out/gm1901.adt` bằng [`tools/mkadt.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkadt.py):**
+   ```sh
+   # Dùng bank RAM trên (0x1_00000000, ~3.95 GiB):
+   python3 tools/mkadt.py shim/out/gm1901.adt --highmem
+
+   # Hoặc dùng bank RAM dưới (0xb0000000, ~1.2 GiB) nếu muốn kiểm tra an toàn bước đầu:
+   python3 tools/mkadt.py shim/out/gm1901-low.adt
+
+   # Xem toàn bộ cây thiết bị đã tạo:
+   python3 tools/mkadt.py shim/out/gm1901.adt --highmem --dump
+   ```
+
+---
+
+### Bước 3. Build Kernel XNU
+
+Kernel XNU (`xnu-8796`) được build tự động trên runner macOS của GitHub Actions qua workflow [`.github/workflows/xnu.yml`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/.github/workflows/xnu.yml):
+
+```sh
+# 1. Kiểm tra các bản vá trong xnu/patches/ áp dụng sạch trước khi push:
+python3 research/check-patch-order.py
+
+# 2. Kích hoạt build trên GitHub Actions và tải kernel về:
 gh workflow run xnu.yml -R YOU/ios-sweet
+gh run watch -R YOU/ios-sweet
 gh run download RUN_ID -R YOU/ios-sweet -n xnu-kernel -D xnu/out
 ```
 
-Để kiểm tra nhanh một tệp C/C++ cục bộ trước khi chạy CI, dùng [`tools/xnu-cc.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/xnu-cc.py) và [`research/check-patch-order.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/research/check-patch-order.py).
+---
 
-### 2. Tạo image phân vùng gốc iOS
+### Bước 4. Đóng gói Payload XNU vào `boot.img` của GM1901
 
-Tải IPSW iOS 16.7.16 (`20H392`) của iPhone X (`iPhone10,3`) từ Apple. Sau đó dùng `apfs-fuse`, `hfsprogs` và `sudo` (trên Linux) để tạo volume HFS+:
+Sau khi có kernel XNU (`xnu/out/kernel.development.sweet`) và file ADT (`shim/out/gm1901.adt`):
 
-```sh
-# Các disk image OS, SystemOS và AppOS trong IPSW (xem tên trong BuildManifest.plist)
-tools/mkiosroot.sh OS.dmg SystemOS.dmg AppOS.dmg ios16-root.img 16G
-sudo fsck.hfsplus -fy ios16-root.img
-sudo mount -t hfsplus -o loop,force ios16-root.img /mnt/iosroot
-sudo python3 tools/sweet-root-tweaks.py /mnt/iosroot
-sudo umount /mnt/iosroot
-img2simg ios16-root.img ios16-root.simg
-```
+1. **Tạo payload bằng [`tools/mkpayload.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkpayload.py):**
+   ```sh
+   # Cấu hình khuyên dùng khi bring-up lần đầu trên GM1901 (hiện chữ console trên màn hình, bật USB live log):
+   python3 tools/mkpayload.py \
+       xnu/out/kernel.development.sweet \
+       shim/out/gm1901.adt \
+       shim/out/payload-gm1901.bin \
+       --cmdline 'debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2'
+   ```
+2. **Đóng gói payload vào `shim-boot.img` và `shim-boot-oos.img` bằng [`shim/build.sh`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/build.sh):**
+   ```sh
+   ./shim/build.sh shim/out/payload-gm1901.bin
+   ```
+3. **Kiểm tra lại tính toàn vẹn của `shim-boot.img`:**
+   ```sh
+   python3 tools/unpack_bootv2.py shim/out/shim-boot.img shim/out/check
+   cmp shim/out/check/ramdisk shim/out/payload-gm1901.bin && echo "OK!"
+   rm -rf shim/out/check
+   ```
 
-Công cụ tạo device tree chép `/product` từ device tree iPhone X thật (`d22ap.adt`), chỉ cần trích xuất một lần:
-
-```sh
-python3 tools/remotezip.py IPSW_URL DeviceTree.d22ap.im4p research/ipsw-x/dt
-ipsw img4 im4p extract research/ipsw-x/dt/Firmware/all_flash/DeviceTree.d22ap.im4p -o research/ipsw-x/d22ap.adt
-```
-
-### 3. Tạo boot image
-
-Sau khi áp các bản vá phần cứng GM1901 cho `shim/`, `tools/mkadt.py` và `xnu/patches/`:
-
-```sh
-python3 tools/mkadt.py shim/out/sweet.adt --highmem --cpus 8
-python3 tools/mkpayload.py xnu/out/kernel.development.sweet shim/out/sweet.adt shim/out/payload.bin \
-    --cmdline 'debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30 sweetusb=2'
-shim/build.sh ../shim/out/payload.bin      # -> shim/out/shim-boot.img
-```
-
-Ý nghĩa của các boot-args chính:
+#### Bảng tra cứu các cờ `boot-args` quan trọng
 
 | Boot-arg | Tác dụng |
 | --- | --- |
-| `rd=ufsroot0 ufsrw=1 rootrw=1` | Dùng phân vùng `userdata` làm phân vùng gốc HFS+, cho phép đọc/ghi |
-| `cpus=8` | Khởi động cả 8 lõi CPU qua PSCI (`cpus=1` là phương án dự phòng an toàn khi debug bước đầu) |
-| `launchd_unsecure_cache=1` | Cho phép `launchd` chấp nhận job cache mà không cần AMFI |
-| `wdt=-1 wdt_test=no_user_checkin` | Tắt hardware watchdog |
-| `sweetfb_noconsole=1` | Ẩn chữ console kernel đè lên giao diện iOS (khi cần xem chữ log trực tiếp trên màn hình trong lúc bring-up GM1901 lần đầu, hãy **bỏ** cờ này) |
-| `sweetfb_hz=30` | Tần số cập nhật màn hình khi chép khung hình bằng CPU |
-| `sweetusb=2` | Bật trình điều khiển USB DWC3 CDC-ECM (`192.168.7.2/24`) và truyền log kernel trực tiếp qua UDP `192.168.7.1:5140` |
-| `sweettouch=0`, `sweetkeys=0` | Tắt trình điều khiển cảm ứng hoặc nút bấm nếu cần cô lập lỗi |
+| `rd=ufsroot0 ufsrw=1 rootrw=1` | Mount phân vùng `userdata` trên UFS làm phân vùng gốc HFS+ ở chế độ đọc/ghi |
+| `cpus=8` | Khởi động đủ 8 lõi Kryo 485 qua PSCI (`cpus=1` hoặc `cpus=4` nếu muốn chỉ chạy cụm lõi tiết kiệm điện A55 khi debug) |
+| `sweetfb_noconsole=1` | Ẩn chữ log của kernel trên màn hình để chỉ hiển thị giao diện iOS (bỏ cờ này trong lần boot đầu để nhìn thấy log trực tiếp trên màn hình) |
+| `sweetfb_hz=30` | Giới hạn tần số chép framebuffer ở 30 Hz để giảm tải cho CPU |
+| `sweetusb=2` | Bật mạng USB CDC-ECM (`192.168.7.2/24`) và tự động bắn luồng log console qua UDP tới `192.168.7.1:5140` mỗi 100 ms |
+| `sweettouch=0`, `sweetkeys=0` | Tắt tạm thời trình điều khiển cảm ứng hoặc phím bấm nếu cần cô lập lỗi phần cứng |
+| `wdt=-1 wdt_test=no_user_checkin` | Vô hiệu hóa watchdog phần cứng và watchdog không gian người dùng |
+| `launchd_unsecure_cache=1` | Cho phép `launchd` nạp cache dịch vụ mà không đòi hỏi xác thực chữ ký AMFI |
 
-### 4. Ghi phân vùng gốc và khởi động tạm thời
+---
 
-```sh
-fastboot -S 512M flash userdata ios16-root.simg
-fastboot boot shim/out/shim-boot.img
-```
+### Bước 5. Tạo & Flash phân vùng gốc iOS (`userdata`) và Khởi động
 
-### 5. Đọc log kernel (qua USB trực tiếp hoặc qua Recovery)
+1. **Tạo image HFS+ từ IPSW iPhone X (`20H392`) (trên máy Linux có `apfs-fuse` và `hfsprogs`):**
+   ```sh
+   tools/mkiosroot.sh OS.dmg SystemOS.dmg AppOS.dmg ios16-root.img 16G
+   sudo fsck.hfsplus -fy ios16-root.img
+   sudo mount -t hfsplus -o loop,force ios16-root.img /mnt/iosroot
+   sudo python3 tools/sweet-root-tweaks.py /mnt/iosroot
+   sudo umount /mnt/iosroot
+   img2simg ios16-root.img ios16-root.simg
+   ```
+2. **Flash vào phân vùng `userdata` (CẢNH BÁO: Xóa sạch dữ liệu Android trong `userdata`):**
+   ```sh
+   fastboot -S 512M flash userdata ios16-root.simg
+   ```
+3. **Khởi động iOS tạm thời qua `fastboot boot`:**
+   ```sh
+   # Với máy chạy bootloader Evolution X / OOS 11-12:
+   fastboot boot shim/out/shim-boot.img
 
-- **Cách 1 — Xem log trực tiếp qua cáp USB (khi `sweetusb=2` đã lên):**
+   # Hoặc với máy chạy bootloader OOS 9/10 gốc:
+   fastboot boot shim/out/shim-boot-oos.img
+   ```
+
+---
+
+### Bước 6. Thu thập Log & Gỡ lỗi
+
+- **Cách 1 — Xem log trực tiếp theo thời gian thực qua cáp USB (`sweetusb=2`):**
+  Khi kernel đã khởi tạo xong DWC3 USB CDC-ECM, máy tính sẽ nhận một card mạng USB Ethernet (`1209:0001`). Chạy:
   ```sh
-  tools/sweet-usbnet.sh logs/live-boot.txt
+  tools/sweet-usbnet.sh logs/live-gm1901.txt
   ```
-- **Cách 2 — Đọc vòng log 4 MiB cuối `userdata` từ Recovery (khi máy panic/treo sớm trước khi USB lên):**
+  Script sẽ đặt IP máy tính là `192.168.7.1/24` và hứng toàn bộ log UDP tại cổng `5140` (bao gồm cả 64 KiB lịch sử đầu khởi động). Có thể kiểm tra kết nối bằng `ping 192.168.7.2`.
+- **Cách 2 — Đọc vòng log 4 MiB lưu bền vững ở cuối phân vùng `userdata` (khi máy treo/panic sớm):**
   ```sh
   fastboot boot recovery/recovery.img
-  tools/sweet-log-pull.sh logs/boot.txt
+  tools/sweet-log-pull.sh logs/boot-gm1901.txt
   adb reboot bootloader
+  ```
+- **Giải mã địa chỉ hàm khi crash (`CRASH name ...`):**
+  ```sh
+  python3 tools/sweet-crash.py logs/boot-gm1901.txt
   ```
 
 ---
@@ -156,7 +251,7 @@ fastboot boot shim/out/shim-boot.img
 | Đường dẫn | Nội dung |
 | --- | --- |
 | [`shim/`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim) | Boot shim bare-metal (C + asm), đóng gói thành Android `boot.img` |
-| [`xnu/patches/`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches) | Chuỗi bản vá XNU (`0001`–`0080`), cùng script chuẩn bị `libpthread`, `HFS` và `BearSSL` |
+| [`xnu/patches/`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches) | Chuỗi bản vá XNU (`0001`–`0082`), cùng script chuẩn bị `libpthread`, `HFS` và `BearSSL` |
 | [`.github/workflows/xnu.yml`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/.github/workflows/xnu.yml) | GitHub Actions workflow build kernel XNU trên runner macOS |
 | [`tools/mkadt.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkadt.py) | Tạo Apple Device Tree (ADT) từ bố trí MMIO và danh tính iPhone X |
 | [`tools/mkpayload.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkpayload.py) | Đóng gói kernel + ADT + boot-args thành payload cho shim |
@@ -171,7 +266,7 @@ fastboot boot shim/out/shim-boot.img
 
 ---
 
-## Các bản vá kernel (`0001`–`0080`)
+## Các bản vá kernel (`0001`–`0082`)
 
 | # | Nội dung |
 | --- | --- |
@@ -195,7 +290,8 @@ fastboot boot shim/out/shim-boot.img
 | 0066–0069 | Thông tin vùng lỗi khi crash; tắt chữ console; tra cứu `IOSurface` đã ánh xạ; ghi log bền vững theo lô |
 | 0070–0071 | Bật syscall `pid_hibernate` (435) và cờ cạnh `kIOHIDDigitizerEventFromEdgeTip` giúp vuốt từ cạnh dưới về màn hình chính & mở đa nhiệm hoạt động |
 | 0072–0077 | Trình điều khiển USB DWC3 device mode (`sweet_usb.c`), ép VBUS qua QSCRATCH, giao diện mạng CDC-ECM `ue0` (`192.168.7.2/24`) và truyền log trực tiếp qua UDP |
-| 0078–0080 | Khởi động đủ 8 lõi CPU (`cpus=8`), tắt/bật màn hình qua nút nguồn (`kern_RequestPowerChange`) và theo dõi bảng định tuyến mạng |
+| 0078–0081 | Khởi động đủ 8 lõi CPU (`cpus=8`), tắt/bật màn hình qua nút nguồn (`kern_RequestPowerChange`), theo dõi bảng định tuyến mạng và trạng thái liên kết USB |
+| 0082 | **Cổng chuyển các trình điều khiển sang OnePlus 7 (`GM1901` / SM8150):** màn hình `1080×2340` (`sweet_early.c`, `SweetHID.cpp`), nút cứng PM8150 SID 0 GPIO6/GPIO7 (`sweet_keys.c`), nguồn RPMh `"ldoa17"` `3008` mV (`sweet_rpmh.c`), cảm ứng Synaptics S3706 RMI4 trên GENI SE17 I²C `0x00c80000` (`sweet_touch.c`), và các thanh ghi CBCR clock USB của SM8150 (`sweet_usb.c`) |
 
 ---
 

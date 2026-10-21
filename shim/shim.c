@@ -12,7 +12,7 @@
 #include "loader.h"
 #include "ufs.h"
 
-#define IMEM_RESTART_REASON	0x146aa65cUL	/* qcom,msm-imem restart_reason@65c */
+#define IMEM_RESTART_REASON	0x146bf65cUL	/* SM8150 (GM1901) imem@146bf000 restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
 #define PSHOLD			0x0c264000UL
 
@@ -143,12 +143,15 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 		return;
 	}
 	con_clear(BLUE);
-	switch (slot & 3) {
-	case 0: con_str("PANIC", "SYNC"); break;
-	case 1: con_str("PANIC", "IRQ"); break;
-	case 2: con_str("PANIC", "FIQ"); break;
-	default: con_str("PANIC", "SERROR"); break;
-	}
+	if ((slot & 3) == 0)
+		con_str("PANIC", "SYNC");
+	else if ((slot & 3) == 1) {
+		__asm__ volatile("" : "+r"(slot));
+		con_str("PANIC", "IRQ");
+	} else if ((slot & 3) == 2)
+		con_str("PANIC", "FIQ");
+	else
+		con_str("PANIC", "SERROR");
 	con_hex2("SLOT", "n=", slot, "cpu=", rsr("mpidr_el1"));
 	con_str("STAGE", stage);
 	con_hex("ESR", rsr("esr_el1"));
@@ -377,7 +380,7 @@ void shim_main(uint64_t dtb)
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);
-	con_str("SHIM", "sweet milestone 4: xnu loader");
+	con_str("SHIM", "gm1901 milestone 4: xnu loader");
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
@@ -405,7 +408,7 @@ void shim_main(uint64_t dtb)
 	if (rc)
 		con_clear(RED);
 
-	con_str("SHIM", "sweet milestone 3");
+	con_str("SHIM", "gm1901 milestone 3");
 	con_skip();
 	con_hex2("DTB", "at=", dtb, "magic=", dtb ? __builtin_bswap32(rd32(dtb)) : 0);
 	con_hex2("IMAGE", "lo=", mi.img_lo, "hi=", mi.img_hi);
