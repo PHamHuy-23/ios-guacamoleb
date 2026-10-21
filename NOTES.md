@@ -1,6 +1,52 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## Active handoff update (2026-10-20)
+## Active handoff update (2026-10-21)
+
+**GM1901 (OnePlus 7, SM8150) firmware & driver reverse-engineering milestone (via DTB/DTBO unpacking + MCP REA):**
+- **Extracted local firmware artifacts (untracked in `research/gm1901/`, kept out of git):**
+  - Unpacked [`default-img/OnePlus7Oxygen_14.O.11_OTA_011_all_1906072127_boot.img`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/default-img/OnePlus7Oxygen_14.O.11_OTA_011_all_1906072127_boot.img) -> `research/gm1901/oos_boot/Image` (raw ARM64 Linux 4.14 kernel after stripping 20-byte `UNCOMPRESSED_IMG` header) + `research/gm1901/oos_boot/dtbs/dtb_00.dtb`..`dtb_03.dtb` (`dtb_02.dtb` is `SM8150 v2 SoC`, `msm-id = <0x153 0x20000>`).
+  - Extracted `oos_dtbo.img` and `oos_abl.img` from `/Users/nguyendinhkhanh/Downloads/OnePlus7Oxygen_14.O.22_OTA_022_all_1911070324_835275f5.zip` (`payload.bin`) -> unpacked 39 DTBOs in `research/gm1901/oos_dtbo/` and `LinuxLoader.efi` (PE32+ ARM64 UEFI ABL) in `research/gm1901/LinuxLoader.efi`.
+  - Identified OnePlus 7 (GM1901 / `guacamoleb`) as `oem,project-id = <0x49a9>` (`18857`), overlays `dtbo_09.dtb`, `dtbo_17.dtb`, `dtbo_20.dtb` (MP revisions 14/15), `dtbo_21.dtb`.
+  - Applied `116,353` `R_AARCH64_RELATIVE` relocations (`kva_base = 0xffffff8008080000`) to `research/gm1901/Image_reloc.bin` and built `research/gm1901/s3706_driver_v2.elf` to decompile GM1901's `synaptics-s3706` touch driver, `pinctrl-sm8150`, and `gcc-sm8150` with **MCP REA** (Hopper provider).
+- **Verified Hardware & Driver Mapping (GM1901 SM8150 vs. `sweet` SM7150):**
+  1. **Boot Image Format ([`shim/build.sh`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/build.sh)):**
+     - Stock OOS 9/10 `boot.img` uses boot header **v1** with a 20-byte `UNCOMPRESSED_IMG` header (`"UNCOMPRESSED_IMG"` + `<I` kernel size + `0x00000000`) + raw `Image` + appended base DTB (`dtb_02.dtb`). Evolution X Android 16 `boot.img` uses header **v2** (`--dtb_offset 0x1f00000`).
+  2. **Early Boot / GICv3 / Timer / Reset / Display ([`shim/shim.c`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/shim.c), [`shim/console.h`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/console.h), [`tools/mkadt.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkadt.py)):**
+     - **GICv3:** `GICD = 0x17a00000`, `GICR = 0x17a60000` (size `0x100000`, stride `0x20000`), vtimer PPI 19, `19.2 MHz` — **identical to `sweet`**.
+     - **PSHOLD:** `0x0c264000` — **identical to `sweet`**.
+     - **IMEM `restart_reason`:** **`0x146bf65c`** (`imem@146bf000 + 0x65c`; on `sweet` it was `0x146aa65c`).
+     - **Splash Framebuffer (`cont_splash_region`):** `0x9c000000`, size `0x02400000` (`36 MiB`), panel `samsung_s6e3fc2x01_cmd` / `sofef03f_m` resolution **`1080 x 2340`** (`stride = 4320`), vs `1080 x 2400` on `sweet`.
+     - **CPUs:** 8 cores (`cpu@0`..`cpu@700`, `reg = core << 8`), `0..3` Kryo 485 Silver (A55), `4..6` Kryo 485 Gold (A76), `7` Kryo 485 Gold Prime (A76).
+  3. **UFS (`bsd/dev/sweet_ufs.c`, [`shim/ufs.c`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim/ufs.c)):**
+     - `UFS_BASE = 0x01d84000`, IRQ `GIC_SPI 265` (`0x109`) — **identical to `sweet`**.
+  4. **RPMh (`bsd/dev/sweet_rpmh.c` in [`0062-sweet-touch-power-battery.patch`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches/0062-sweet-touch-power-battery.patch)):**
+     - `apps_rsc` `0x18220000`, `tcs_base = 0x18220d00`, `cmd-db = 0x0c3f000c`, DRV 2, ACTIVE TCS index 2 — **100% identical to `sweet`**.
+     - GM1901 touch 2.8V rail is **`"ldoa17"`** (`pm8150_l17`) at **`3008` mV** (`vdd_2v8_volt = 3008000` uV; vs `"ldoc11"` `3200` mV on `sweet`).
+  5. **SPMI & Hardware Keys (`bsd/dev/sweet_keys.c` in [`0060-sweet-keys-touch-drivers.patch`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches/0060-sweet-keys-touch-drivers.patch)):**
+     - SPMI arbiter v5 (`0x0c440000` core, `0x0e600000` obs, `0x0c40a000` cnfg) — **identical to `sweet`**.
+     - **Power (`kpdpwr`):** SID 0 `pon@800` PPID **`0x008`** (`0x0810` bit 0, active high).
+     - **Vol Up (`vol_up`):** PM8150 **SID 0 GPIO6** (`gpios = <&pm8150_gpios 6 1>`) -> PPID **`0x0c5`**, RT status `0xc510` bit 0 (active low; vs SID 4 GPIO2 `0x4c1` on `sweet`).
+     - **Vol Down (`vol_down`):** PM8150 **SID 0 GPIO7** (`gpios = <&pm8150_gpios 7 1>`) -> PPID **`0x0c6`**, RT status `0xc610` bit 0 (active low) AND/OR `pon@800` `resin` (`0x0810` bit 1).
+     - **Alert Slider (`tri_state_key`):** TLMM GPIO 27 (`EAST` `0x0351b000`), GPIO 125 (`WEST` `0x0317d000`), GPIO 134 (`SOUTH` `0x03d86000`).
+  6. **Touch Controller (`bsd/dev/sweet_touch.c` — Synaptics S3706 on GENI SE17 I2C, decompiled via MCP REA):**
+     - **I2C Bus & Slave:** `/soc/i2c@0xc80000` (`qupv3_se17_i2c`, first SE inside Wrapper 2 `qcom,qupv3_2_geni_se@cc0000`), slave address **`0x20`**, compatible `"synaptics-s3706"`.
+     - **GCC Clocks (`0x00100000`):** `i2c@0xc80000` uses `se-clk = gcc_qupv3_wrap2_s0_clk` (`CBCR = 0x1e144`, `CMD_RCGR = 0x1e148`, `CFG_RCGR = 0x1e14c`), `m-ahb = gcc_qupv3_wrap_2_m_ahb_clk` (`CBCR = 0x1e004`), `s-ahb = gcc_qupv3_wrap_2_s_ahb_clk` (`CBCR = 0x1e008`), plus `core_clk` (`0x1e00c`) / `core_2x_clk` (`0x1e014`), voted via `APCS_CLOCK_BRANCH_ENA_VOTE_1` (**`0x52014`**, bits `0x1f` / `0x3ff`).
+     - **TLMM GPIOs (all in `SOUTH` tile `0x03d00000 = 0x03000000 + 0xd00000`, stride `0x1000`, verified from `sm8150_groups` at `0x13e36d0`):**
+       - **GPIO 55** (`0x03d37000`): I2C SDA (`mux = 1` for `qup17`, 2mA, no pull).
+       - **GPIO 56** (`0x03d38000`): I2C SCL (`mux = 1` for `qup17`, 2mA, no pull).
+       - **GPIO 54** (`0x03d36000`): Touch Reset (`mux = 0`, output high run / low reset).
+       - **GPIO 119** (`0x03d77000`): Touch 1.8V enable `tp_1v8` (`mux = 0`, output high).
+       - **GPIO 122** (`0x03d7a000`): Touch IRQ (`mux = 0`, input).
+     - **Synaptics S3706 RMI4 Protocol (from REA decompilation of `0xffffff8008b82a50`, `0xffffff8008b835d0`, `0xffffff8008b86228`, `0xffffff8008b80eb8`):**
+       - Power sequence: GPIO 119 high (1.8V) + RPMh `"ldoa17"` `3008` mV (2.8V) -> wait 10 ms -> GPIO 54 low 10 ms -> high -> wait 80 ms -> write `0x00` to reg `0xff` (Page 0).
+       - Page 0 PDT descriptors: `0xdd` = F12 (2D touch: `data_base = buf[3]`, default `0x08`, object attention at `F12_data_base + 2`), `0xe3` = F01 (device control: `data_base = buf[3]`, default `0x04`, IRQ status at `F01_data_base + 1`), `0xe9` = F34.
+       - Touch points: read `F01_data_base + 1` (clears IRQ), read `N * 8` bytes at `F12_data_base`; each 8-byte finger record `rec[0..7]` has `type = rec[0]` (`0x01` = finger contact, `0x00` = lift), `x = rec[1] | ((rec[2] & 0x0f) << 8)` (`0..1079`), `y = rec[3] | ((rec[4] & 0x0f) << 8)` (`0..2339`), `z = rec[5]`, `wx = rec[6] & 0x0f`, `wy = rec[7] & 0x0f`.
+  7. **USB DWC3 (`bsd/dev/sweet_usb.c` in [`0072-sweet-usb-probe.patch`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches/0072-sweet-usb-probe.patch)..[`0076-sweet-usb-rx-cluster.patch`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/xnu/patches/0076-sweet-usb-rx-cluster.patch)):**
+     - DWC3 core `0x0a600000`, QSCRATCH `0x0a6f8800`, QUSB2 PHY `0x088e2000`, GCC `USB30_PRIM_GDSCR = 0x0f004`, `MASTER_CBCR = 0x0f010`, `SLEEP_CBCR = 0x0f014`, `MOCK_UTMI_CBCR = 0x0f018` — **100% identical to `sweet`** (only `AGGRE_NOC_CBCR = 0x8201c` and `CFG_NOC_CBCR = 0x0b01c` differ in diagnostic prints).
+- **README updated (2026-10-21):** Updated [`README.md`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/README.md) to reflect the user's OnePlus 7 (`GM1901` / `guacamoleb`, Snapdragon 855 / SM8150) target, the current pre-boot status on GM1901 hardware, the verified SM8150 hardware/driver mapping table (from OxygenOS/Evolution X DTB/DTBO unpacking and MCP REA kernel driver decompilation), local firmware artifact paths, and patches `0001`–`0080`.
+- **Next concrete step:** Await user confirmation to apply the GM1901 code changes to [`shim/`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/shim), [`tools/mkadt.py`](file:///Users/nguyendinhkhanh/Documents/GitHub/ios-sweet/tools/mkadt.py), and XNU patches (`sweet_keys.c`, `sweet_rpmh.c`, `sweet_touch.c`, `SweetFramebuffer.cpp`) and build the first GM1901 boot image.
+
+## Previous handoff update (2026-10-20)
 
 **Documentation milestone:** translated `README.md` into Vietnamese while
 preserving commands, technical identifiers, links, and the existing
